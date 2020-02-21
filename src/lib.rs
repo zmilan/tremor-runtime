@@ -16,6 +16,7 @@
 
 #![forbid(warnings)]
 #![deny(missing_docs)]
+#![allow(dead_code)] // .unwrap!()
 #![recursion_limit = "1024"]
 #![deny(
     clippy::all,

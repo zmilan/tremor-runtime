@@ -12,14 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub(crate) use crate::async_sink::{AsyncSink, SinkDequeueError};
+//pub(crate) use crate::async_sink::{AsyncSink, SinkDequeueError};
+//pub(crate) use crate::dflt::{self};
+//pub(crate) use crate::utils::{duration_to_millis, nanotime};
 pub(crate) use crate::codec::Codec;
-pub(crate) use crate::dflt::{self};
 pub(crate) use crate::errors::*;
 pub(crate) use crate::offramp::{self, Offramp};
 pub(crate) use crate::pipeline;
 pub(crate) use crate::postprocessor::{self, Postprocessor, Postprocessors};
 pub(crate) use crate::url::TremorURL;
+pub(crate) use crate::utils::nanotime;
 pub(crate) use crate::utils::ConfigImpl;
 pub(crate) use crate::utils::{duration_to_millis, hostname, nanotime};
 pub(crate) use crate::{Event, OpConfig};

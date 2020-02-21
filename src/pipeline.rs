@@ -16,20 +16,18 @@ use crate::offramp;
 use crate::registry::ServantId;
 use crate::repository::PipelineArtefact;
 use crate::url::TremorURL;
-use async_std::sync::channel;
+use async_std::sync::{self, channel};
 use async_std::task::{self, JoinHandle};
-use crossbeam_channel::{bounded, Sender as CbSender};
 use std::borrow::Cow;
 use std::fmt;
-use std::thread;
 use tremor_pipeline::Event;
 
-pub(crate) type Sender = async_std::sync::Sender<ManagerMsg>;
+pub(crate) type Sender = sync::Sender<ManagerMsg>;
 
 /// Address for a a pipeline
 #[derive(Clone)]
 pub struct Addr {
-    pub(crate) addr: CbSender<Msg>,
+    pub(crate) addr: sync::Sender<Msg>,
     pub(crate) id: ServantId,
 }
 
@@ -59,10 +57,10 @@ pub enum Dest {
     Pipeline(Addr),
 }
 impl Dest {
-    pub fn send_event(&self, input: Cow<'static, str>, event: Event) -> Result<()> {
+    pub async fn send_event(&self, input: Cow<'static, str>, event: Event) -> Result<()> {
         match self {
-            Self::Offramp(addr) => addr.send(offramp::Msg::Event { input, event })?,
-            Self::Pipeline(addr) => addr.addr.send(Msg::Event { input, event })?,
+            Self::Offramp(addr) => addr.send(offramp::Msg::Event { input, event }).await,
+            Self::Pipeline(addr) => addr.addr.send(Msg::Event { input, event }).await,
         }
         Ok(())
     }
@@ -115,7 +113,7 @@ impl Manager {
     #[allow(clippy::too_many_lines)]
     fn start_pipeline(&self, req: Create) -> Result<Addr> {
         #[inline]
-        fn send_events(
+        async fn send_events(
             eventset: &mut Vec<(Cow<'static, str>, Event)>,
             dests: &halfbrown::HashMap<Cow<'static, str>, Vec<(TremorURL, Dest)>>,
         ) -> Result<()> {
@@ -124,27 +122,31 @@ impl Manager {
                     let len = dest.len();
                     //We know we have len, so grabbing len - 1 elementsis safe
                     for (id, offramp) in unsafe { dest.get_unchecked(..len - 1) } {
-                        offramp.send_event(
+                        offramp
+                            .send_event(
+                                id.instance_port()
+                                    .ok_or_else(|| {
+                                        Error::from(format!("missing instance port in {}.", id))
+                                    })?
+                                    .clone()
+                                    .into(),
+                                event.clone(),
+                            )
+                            .await?;
+                    }
+                    //We know we have len, so grabbing the last elementsis safe
+                    let (id, offramp) = unsafe { dest.get_unchecked(len - 1) };
+                    offramp
+                        .send_event(
                             id.instance_port()
                                 .ok_or_else(|| {
                                     Error::from(format!("missing instance port in {}.", id))
                                 })?
                                 .clone()
                                 .into(),
-                            event.clone(),
-                        )?;
-                    }
-                    //We know we have len, so grabbing the last elementsis safe
-                    let (id, offramp) = unsafe { dest.get_unchecked(len - 1) };
-                    offramp.send_event(
-                        id.instance_port()
-                            .ok_or_else(|| {
-                                Error::from(format!("missing instance port in {}.", id))
-                            })?
-                            .clone()
-                            .into(),
-                        event,
-                    )?;
+                            event,
+                        )
+                        .await?;
                 };
             }
             Ok(())
@@ -154,21 +156,21 @@ impl Manager {
         let mut dests: halfbrown::HashMap<Cow<'static, str>, Vec<(TremorURL, Dest)>> =
             halfbrown::HashMap::new();
         let mut eventset: Vec<(Cow<'static, str>, Event)> = Vec::new();
-        let (tx, rx) = bounded::<Msg>(self.qsize);
+        let (tx, rx) = channel::<Msg>(self.qsize);
         let mut pipeline = config.to_executable_graph(tremor_pipeline::buildin_ops)?;
         let mut pid = req.id.clone();
         pid.trim_to_instance();
         pipeline.id = pid.to_string();
-        thread::Builder::new()
+        task::Builder::new()
             .name(format!("pipeline-{}", id.clone()))
-            .spawn(move || {
+            .spawn(async move {
                 info!("[Pipeline:{}] starting thread.", id);
-                for req in rx {
+                while let Some(req) = rx.recv().await {
                     match req {
                         Msg::Event { input, event } => {
                             match pipeline.enqueue(&input, event, &mut eventset) {
                                 Ok(()) => {
-                                    if let Err(e) = send_events(&mut eventset, &dests) {
+                                    if let Err(e) = send_events(&mut eventset, &dests).await {
                                         error!("Failed to send event: {}", e)
                                     }
                                 }
@@ -181,7 +183,7 @@ impl Manager {
                         Msg::Signal(signal) => match pipeline.enqueue_signal(signal, &mut eventset)
                         {
                             Ok(()) => {
-                                if let Err(e) = send_events(&mut eventset, &dests) {
+                                if let Err(e) = send_events(&mut eventset, &dests).await {
                                     error!("Failed to send event: {}", e)
                                 }
                             }

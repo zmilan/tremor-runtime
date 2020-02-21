@@ -28,7 +28,6 @@ pub(crate) use crate::OffRamp as OfframpArtefact;
 pub(crate) use crate::OnRamp as OnrampArtefact;
 use async_std::sync::channel;
 use async_trait::async_trait;
-use crossbeam_channel::bounded;
 
 /// A Binding
 #[derive(Clone, Debug)]
@@ -136,9 +135,7 @@ impl Artefact for Pipeline {
                                     to.clone(),
                                     offramp,
                                 ))
-                                .map_err(|e| -> Error {
-                                    format!("Could not send to pipeline: {}", e).into()
-                                })?;
+                                .await;
                         } else {
                             return Err(format!("Offramp {} not found", to).into());
                         }
@@ -154,9 +151,7 @@ impl Artefact for Pipeline {
                                     to.clone(),
                                     p,
                                 ))
-                                .map_err(|e| -> Error {
-                                    format!("Could not send to pipeline: {:?}", e).into()
-                                })?;
+                                .await;
                         } else {
                             return Err(format!("Pipeline {:?} not found", to).into());
                         }
@@ -185,13 +180,13 @@ impl Artefact for Pipeline {
                         pipeline
                             .addr
                             .send(pipeline::Msg::Disconnect(from.clone().into(), to))
-                            .map_err(|_e| Error::from("Failed to unlink pipeline"))?;
+                            .await;
                     }
                     Some(ResourceType::Pipeline) => {
                         pipeline
                             .addr
                             .send(pipeline::Msg::Disconnect(from.clone().into(), to))
-                            .map_err(|_e| Error::from("Failed to unlink pipeline"))?;
+                            .await;
                     }
                     _ => {
                         return Err("Source isn't an Offramp or Pipeline".into());
@@ -273,10 +268,12 @@ impl Artefact for OfframpArtefact {
             for (pipeline_id, _this) in mappings {
                 info!("Linking offramp {} to {}", id, pipeline_id);
                 if let Some(pipeline) = system.reg.find_pipeline(&pipeline_id).await? {
-                    offramp.send(offramp::Msg::Connect {
-                        id: pipeline_id,
-                        addr: pipeline,
-                    })?;
+                    offramp
+                        .send(offramp::Msg::Connect {
+                            id: pipeline_id,
+                            addr: pipeline,
+                        })
+                        .await;
                 };
             }
             Ok(true)
@@ -293,19 +290,17 @@ impl Artefact for OfframpArtefact {
     ) -> Result<Self::LinkResult> {
         info!("Linking offramp {} ..", id);
         if let Some(offramp) = system.reg.find_offramp(id).await? {
-            let (tx, rx) = bounded(mappings.len());
+            let (tx, rx) = channel(mappings.len());
             for (_this, pipeline_id) in mappings {
-                offramp.send(offramp::Msg::Disconnect {
-                    id: pipeline_id,
-                    tx: tx.clone(),
-                })?;
+                offramp
+                    .send(offramp::Msg::Disconnect {
+                        id: pipeline_id,
+                        tx: tx.clone(),
+                    })
+                    .await;
             }
-            for empty in rx {
-                if empty {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+
+            Ok(rx.recv().await.unwrap_or_default())
         } else {
             Err(format!("Offramp {} not found for unlinking,", id).into())
         }
@@ -403,7 +398,7 @@ impl Artefact for OnrampArtefact {
     ) -> Result<bool> {
         if let Some(onramp) = system.reg.find_onramp(id).await? {
             let mut links = Vec::new();
-            let (tx, rx) = bounded(mappings.len());
+            let (tx, rx) = channel(mappings.len());
 
             for to in mappings.values() {
                 links.push(to.to_owned())
@@ -416,12 +411,8 @@ impl Artefact for OnrampArtefact {
                     })
                     .await;
             }
-            for empty in rx {
-                if empty {
-                    return Ok(true);
-                }
-            }
-            Ok(false)
+
+            Ok(rx.recv().await.unwrap_or_default())
         } else {
             Err(format!("Unlinking failed Onramp {} not found ", id).into())
         }

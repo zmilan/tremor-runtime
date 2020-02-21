@@ -15,11 +15,12 @@
 use crate::dflt;
 use crate::onramp::prelude::*;
 use async_std::sync::{channel, Receiver};
+use async_std::task;
+use hostname::get_hostname;
 use serde_yaml::Value;
 use std::fs::File;
 use std::io::{BufRead, Read};
 use std::path::Path;
-use std::thread;
 use std::time::Duration;
 use xz2::read::XzDecoder;
 
@@ -74,8 +75,8 @@ struct Acc {
 // We got to allow this because of the way that the onramp works
 // with iterating over the data.
 #[allow(clippy::needless_pass_by_value)]
-fn onramp_loop(
-    rx: &Receiver<onramp::Msg>,
+async fn onramp_loop(
+    rx: Receiver<onramp::Msg>,
     data: Vec<u8>,
     config: &Config,
     mut preprocessors: Preprocessors,
@@ -126,6 +127,7 @@ fn onramp_loop(
 
         if let Some(data) = acc.consuming.pop() {
             let mut ingest_ns = nanotime();
+
             send_event(
                 &pipelines,
                 &mut preprocessors,
@@ -135,7 +137,9 @@ fn onramp_loop(
                 &origin_uri,
                 id,
                 data,
-            );
+            )
+            .await;
+
             id += 1;
         }
     }
@@ -153,10 +157,10 @@ impl Onramp for Blaster {
         let config2 = self.config.clone();
         let codec = codec::lookup(&codec)?;
         let preprocessors = make_preprocessors(&preprocessors)?;
-        thread::Builder::new()
+        task::Builder::new()
             .name(format!("onramp-blaster-{}", "???"))
-            .spawn(move || {
-                onramp_loop(&rx, data2, &config2, preprocessors, codec, metrics_reporter)
+            .spawn(async move {
+                onramp_loop(rx, data2, &config2, preprocessors, codec, metrics_reporter).await
             })?;
         Ok(tx)
     }

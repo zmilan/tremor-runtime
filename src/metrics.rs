@@ -74,22 +74,23 @@ impl RampReporter {
     }
 
     #[inline]
-    pub fn periodic_flush(&mut self, timestamp: u64) {
+    pub async fn periodic_flush(&mut self, timestamp: u64) {
         if let Some(interval) = self.flush_interval {
             if timestamp - self.last_flush_ns > interval {
-                self.flush(timestamp);
+                self.flush(timestamp).await;
             }
         }
     }
 
-    fn flush(&mut self, timestamp: u64) {
-        self.send_metric(timestamp, "in", self.metrics.r#in);
-        self.send_metric(timestamp, "out", self.metrics.out);
-        self.send_metric(timestamp, "error", self.metrics.error);
+    async fn flush(&mut self, timestamp: u64) {
+        self.send_metric(timestamp, "in", self.metrics.r#in).await;
+        self.send_metric(timestamp, "out", self.metrics.out).await;
+        self.send_metric(timestamp, "error", self.metrics.error)
+            .await;
         self.last_flush_ns = timestamp;
     }
 
-    fn send_metric(&self, timestamp: u64, port: &'static str, count: u64) {
+    async fn send_metric(&self, timestamp: u64, port: &'static str, count: u64) {
         if let Some((metrics_input, metrics_addr)) = &self.metrics_pipeline {
             if let Some(input) = metrics_input.instance_port() {
                 // metrics tags
@@ -120,12 +121,13 @@ impl RampReporter {
                     kind: None,
                 };
 
-                if let Err(e) = metrics_addr.addr.send(pipeline::Msg::Event {
-                    input: input.into(),
-                    event: metrics_event,
-                }) {
-                    error!("Failed to send to system metrics pipeline: {}", e);
-                }
+                metrics_addr
+                    .addr
+                    .send(pipeline::Msg::Event {
+                        input: input.into(),
+                        event: metrics_event,
+                    })
+                    .await
             }
         }
     }

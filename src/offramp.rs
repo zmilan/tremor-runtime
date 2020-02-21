@@ -20,28 +20,29 @@ use crate::registry::ServantId;
 use crate::system::METRICS_PIPELINE;
 use crate::url::TremorURL;
 use crate::{Event, OpConfig};
-use async_std::sync::channel;
+use async_std::sync::{self, channel};
 use async_std::task::{self, JoinHandle};
-use crossbeam_channel::{bounded, Sender as CbSender};
 use std::borrow::Cow;
 use std::fmt;
-use std::thread;
 
-mod blackhole;
-mod debug;
-mod elastic;
-mod file;
-mod gcs;
-mod gpub;
-mod kafka;
-mod postgres;
 mod prelude;
-mod rest;
+
+// Offramps
+mod blackhole;
+//mod debug;
+//mod elastic;
+//mod file;
+//mod gcs;
+//mod gpub;
+//mod kafka;
+//mod rest;
 mod stderr;
 mod stdout;
-mod tcp;
-mod udp;
-mod ws;
+//mod tcp;
+//mod udp;
+//mod postgres;
+
+// mod ws; .unwrap() - reenable
 
 pub enum Msg {
     Event {
@@ -54,12 +55,12 @@ pub enum Msg {
     },
     Disconnect {
         id: TremorURL,
-        tx: CbSender<bool>,
+        tx: sync::Sender<bool>,
     },
 }
 
-pub(crate) type Sender = async_std::sync::Sender<ManagerMsg>;
-pub type Addr = CbSender<Msg>;
+pub(crate) type Sender = sync::Sender<ManagerMsg>;
+pub type Addr = sync::Sender<Msg>;
 
 // We allow this here since we can't pass in &dyn Code as that would taint the
 // overlying object with lifetimes.
@@ -83,19 +84,19 @@ pub trait Impl {
 pub fn lookup(name: &str, config: &Option<OpConfig>) -> Result<Box<dyn Offramp>> {
     match name {
         "blackhole" => blackhole::Blackhole::from_config(config),
-        "debug" => debug::Debug::from_config(config),
-        "elastic" => elastic::Elastic::from_config(config),
-        "file" => file::File::from_config(config),
-        "gcs" => gcs::GCS::from_config(config),
-        "gpub" => gpub::GPub::from_config(config),
-        "kafka" => kafka::Kafka::from_config(config),
-        "postgres" => postgres::Postgres::from_config(config),
-        "rest" => rest::Rest::from_config(config),
+        // "debug" => debug::Debug::from_config(config),
+        // "elastic" => elastic::Elastic::from_config(config),
+        // "file" => file::File::from_config(config),
+        // "gcs" => gcs::GCS::from_config(config),
+        // "gpub" => gpub::GPub::from_config(config),
+        // "kafka" => kafka::Kafka::from_config(config),
+        // "postgres" => postgres::Postgres::from_config(config),
+        // "rest" => rest::Rest::from_config(config),
         "stdout" => stdout::StdOut::from_config(config),
         "stderr" => stderr::StdErr::from_config(config),
-        "tcp" => tcp::Tcp::from_config(config),
-        "udp" => udp::Udp::from_config(config),
-        "ws" => ws::Ws::from_config(config),
+        // "tcp" => tcp::Tcp::from_config(config),
+        // "udp" => udp::Udp::from_config(config),
+        // "ws" => ws::Ws::from_config(config), .unwrap() reenable
         _ => Err(format!("Offramp {} not known", name).into()),
     }
 }
@@ -136,13 +137,13 @@ impl Manager {
 
         let h = task::spawn(async move {
             info!("Onramp manager started");
-            loop {
-                match rx.recv().await {
-                    Some(ManagerMsg::Stop) => {
+            while let Some(msg) = rx.recv().await {
+                match msg {
+                    ManagerMsg::Stop => {
                         info!("Stopping onramps...");
                         break;
                     }
-                    Some(ManagerMsg::Create(
+                    ManagerMsg::Create(
                         r,
                         Create {
                             codec,
@@ -151,7 +152,7 @@ impl Manager {
                             mut metrics_reporter,
                             id,
                         },
-                    )) => {
+                    ) => {
                         match offramp.start(&codec, &postprocessors) {
                             Ok(_) => (),
                             Err(e) => {
@@ -160,15 +161,15 @@ impl Manager {
                             }
                         }
 
-                        let (tx, rx) = bounded(self.qsize);
+                        let (tx, rx) = channel(self.qsize);
                         let offramp_id = id.clone();
                         // let mut s = req;
-                        thread::spawn(move || {
+                        task::spawn(async move {
                             info!("[Offramp::{}] started", offramp_id);
-                            for m in rx {
+                            while let Some(m) = rx.recv().await {
                                 match m {
                                     Msg::Event { event, input } => {
-                                        metrics_reporter.periodic_flush(event.ingest_ns);
+                                        metrics_reporter.periodic_flush(event.ingest_ns).await;
 
                                         metrics_reporter.increment_in();
                                         // TODO FIXME implement postprocessors
@@ -212,19 +213,13 @@ impl Manager {
                                             info!("[Offramp::{}] Marked as done ", offramp_id);
                                         }
 
-                                        if let Err(e) = tx.send(r) {
-                                            error!("Failed to send reply: {}", e)
-                                        }
+                                        tx.send(r).await
                                     }
                                 }
                             }
                             info!("[Offramp::{}] stopped", offramp_id);
                         });
                         r.send(Ok(tx)).await
-                    }
-                    None => {
-                        info!("Stopping onramps...");
-                        break;
                     }
                 };
             }

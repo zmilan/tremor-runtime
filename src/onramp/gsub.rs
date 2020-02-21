@@ -73,7 +73,6 @@ fn onramp_loop(
         path: vec![subscription_name.clone()],
     };
 
-    //    thread::spawn(move || {
     let hub = pubsub_api(&config.service_account.to_string())?;
     let projects = hub.projects();
 

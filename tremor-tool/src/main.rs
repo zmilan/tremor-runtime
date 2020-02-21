@@ -55,7 +55,7 @@ use tremor_runtime::functions as tr_fun;
 use tremor_runtime::utils;
 use tremor_script::grok;
 use tremor_script::interpreter::AggrType;
-use tremor_script::EventContext as Context;
+use tremor_script::{grok, EventContext as Context};
 
 enum FormatKind {
     Json,

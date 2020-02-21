@@ -28,7 +28,7 @@ pub(crate) use tremor_pipeline::EventOriginUri;
 
 // TODO pub here too?
 use std::mem;
-pub(crate) use std::thread;
+//pub(crate) use std::thread;
 
 pub fn make_preprocessors(preprocessors: &[String]) -> Result<Preprocessors> {
     preprocessors
@@ -66,7 +66,7 @@ pub fn handle_pp(
     clippy::too_many_lines,
     clippy::too_many_arguments
 )]
-pub(crate) fn send_event(
+pub(crate) async fn send_event(
     pipelines: &[(TremorURL, pipeline::Addr)],
     preprocessors: &mut Preprocessors,
     codec: &mut Box<dyn Codec>,
@@ -80,7 +80,7 @@ pub(crate) fn send_event(
         for d in data {
             match codec.decode(d, *ingest_ns) {
                 Ok(Some(data)) => {
-                    metrics_reporter.periodic_flush(*ingest_ns);
+                    metrics_reporter.periodic_flush(*ingest_ns).await;
                     metrics_reporter.increment_out();
 
                     let event = tremor_pipeline::Event {
@@ -94,26 +94,25 @@ pub(crate) fn send_event(
                     };
 
                     let len = pipelines.len();
-
                     for (input, addr) in &pipelines[0..len - 1] {
                         if let Some(input) = input.instance_port() {
-                            if let Err(e) = addr.addr.send(pipeline::Msg::Event {
-                                input: input.into(),
-                                event: event.clone(),
-                            }) {
-                                error!("[Onramp] failed to send to pipeline: {}", e);
-                            }
+                            addr.addr
+                                .send(pipeline::Msg::Event {
+                                    input: input.into(),
+                                    event: event.clone(),
+                                })
+                                .await
                         }
                     }
 
                     let (input, addr) = &pipelines[len - 1];
                     if let Some(input) = input.instance_port() {
-                        if let Err(e) = addr.addr.send(pipeline::Msg::Event {
-                            input: input.into(),
-                            event,
-                        }) {
-                            error!("[Onramp] failed to send to pipeline: {}", e);
-                        }
+                        addr.addr
+                            .send(pipeline::Msg::Event {
+                                input: input.into(),
+                                event,
+                            })
+                            .await
                     }
                 }
                 Ok(None) => (),
