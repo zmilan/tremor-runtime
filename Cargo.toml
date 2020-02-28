@@ -115,5 +115,5 @@ default = [ ]
 #  waiting for https://github.com/http-rs/tide/pull/408
 tide = { git = "https://github.com/Licenser/tide", branch = "result-into-response" }
 surf = { git = "https://github.com/http-rs/surf", rev = "8368e88f6545e950b06e36e874c098f800a2ca47" }
-async-std = { path = "../../async-std" }
-crossbeam-deque = { path = "../../crossbeam/crossbeam-deque" }
+#async-std = { path = "../../async-std" }
+#crossbeam-deque = { path = "../../crossbeam/crossbeam-deque" }

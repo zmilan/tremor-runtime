@@ -23,8 +23,8 @@ pub(crate) use crate::url::TremorURL;
 pub(crate) use crate::utils::{hostname, nanotime, ConfigImpl};
 pub(crate) use async_std::sync::{channel, Receiver};
 pub(crate) use async_std::task;
-pub(crate) use simd_json::json;
-pub(crate) use tremor_pipeline::EventOriginUri;
+//pub(crate) use simd_json::json;
+//pub(crate) use tremor_pipeline::EventOriginUri;
 
 // TODO pub here too?
 use std::mem;
@@ -142,7 +142,7 @@ pub(crate) async fn handle_pipelines(
 ) -> Result<PipeHandlerResult> {
     if pipelines.is_empty() {
         match rx.recv().await {
-            Some(msg) => handle_pipelines_msg(msg, pipelines, metrics_reporter),
+            Some(msg) => handle_pipelines_msg(msg, pipelines, metrics_reporter).await,
             None => Err("Channel receive error".into()),
         }
     } else if rx.is_empty() {
@@ -150,12 +150,12 @@ pub(crate) async fn handle_pipelines(
     } else {
         match task::block_on(rx.recv()) {
             None => Err("Channel receive error".into()),
-            Some(msg) => handle_pipelines_msg(msg, pipelines, metrics_reporter),
+            Some(msg) => handle_pipelines_msg(msg, pipelines, metrics_reporter).await,
         }
     }
 }
 
-pub(crate) fn handle_pipelines_msg(
+pub(crate) async fn handle_pipelines_msg(
     msg: onramp::Msg,
     pipelines: &mut Vec<(TremorURL, pipeline::Addr)>,
     metrics_reporter: &mut RampReporter,
@@ -173,7 +173,7 @@ pub(crate) fn handle_pipelines_msg(
                 Ok(PipeHandlerResult::Retry)
             }
             onramp::Msg::Disconnect { tx, .. } => {
-                tx.send(true)?;
+                tx.send(true).await;
                 Ok(PipeHandlerResult::Terminate)
             }
         }
@@ -183,10 +183,10 @@ pub(crate) fn handle_pipelines_msg(
             onramp::Msg::Disconnect { id, tx } => {
                 pipelines.retain(|(pipeline, _)| pipeline != &id);
                 if pipelines.is_empty() {
-                    tx.send(true)?;
+                    tx.send(true).await;
                     return Ok(PipeHandlerResult::Terminate);
                 } else {
-                    tx.send(false)?;
+                    tx.send(false).await;
                 }
             }
         };

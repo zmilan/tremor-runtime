@@ -53,7 +53,6 @@ use tremor_runtime::config;
 use tremor_runtime::errors;
 use tremor_runtime::functions as tr_fun;
 use tremor_runtime::utils;
-use tremor_script::grok;
 use tremor_script::interpreter::AggrType;
 use tremor_script::{grok, EventContext as Context};
 

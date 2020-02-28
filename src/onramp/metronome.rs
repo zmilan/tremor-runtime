@@ -66,7 +66,7 @@ fn onramp_loop(
             PipeHandlerResult::Normal => (),
         }
 
-        thread::sleep(Duration::from_millis(config.interval));
+        task::sleep(Duration::from_millis(config.interval));
         let data =
             serde_json::to_vec(&json!({"onramp": "metronome", "ingest_ns": nanotime(), "id": id}));
         let mut ingest_ns = nanotime();

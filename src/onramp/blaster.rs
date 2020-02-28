@@ -14,14 +14,11 @@
 
 use crate::dflt;
 use crate::onramp::prelude::*;
-use async_std::sync::{channel, Receiver};
-use async_std::task;
-use hostname::get_hostname;
 use serde_yaml::Value;
 use std::fs::File;
 use std::io::{BufRead, Read};
 use std::path::Path;
-use std::time::Duration;
+//use std::time::Duration;
 use xz2::read::XzDecoder;
 
 #[derive(Deserialize, Debug, Clone)]
@@ -108,15 +105,14 @@ async fn onramp_loop(
     let iters = config.iters;
     let mut id = 0;
     loop {
-        match task::block_on(handle_pipelines(&rx, &mut pipelines, &mut metrics_reporter))? {
-            PipeHandlerResult::Retry => continue,
-            PipeHandlerResult::Terminate => return Ok(()),
-            PipeHandlerResult::Normal => (),
+        loop {
+            match handle_pipelines(&rx, &mut pipelines, &mut metrics_reporter).await? {
+                PipeHandlerResult::Retry => continue,
+                PipeHandlerResult::Terminate => return Ok(()),
+                PipeHandlerResult::Normal => break,
+            }
         }
-        // TODO better sleep perhaps
-        if let Some(ival) = config.interval {
-            thread::sleep(Duration::from_nanos(ival));
-        }
+
         if Some(acc.count) == iters {
             return Ok(());
         };
@@ -152,7 +148,7 @@ impl Onramp for Blaster {
         preprocessors: &[String],
         metrics_reporter: RampReporter,
     ) -> Result<onramp::Addr> {
-        let (tx, rx) = channel(1);
+        let (tx, rx) = channel(64);
         let data2 = self.data.clone();
         let config2 = self.config.clone();
         let codec = codec::lookup(&codec)?;

@@ -21,15 +21,7 @@ use async_std::sync::{self, channel};
 use async_std::task::{self, JoinHandle};
 use serde_yaml::Value;
 use std::fmt;
-mod blaster;
-mod crononome;
-mod file;
-mod gsub;
-mod kafka;
-mod metronome;
-
 mod prelude;
-
 // Onramps
 mod blaster;
 // mod crononome;
