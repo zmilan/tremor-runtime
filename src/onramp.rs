@@ -59,6 +59,20 @@ pub(crate) trait Onramp: Send {
     fn default_codec(&self) -> &str;
 }
 
+pub(crate) enum SourceState {
+    Connected,
+    Disconnected,
+}
+pub(crate) enum SourceReply {
+    Data(Vec<u8>),
+    StateChange(SourceState),
+}
+#[async_trait::async_trait]
+pub(crate) trait Source {
+    async fn read(&mut self) -> Result<SourceReply>;
+    async fn init(&mut self) -> Result<SourceState>;
+}
+
 // just a lookup
 #[cfg_attr(tarpaulin, skip)]
 pub(crate) fn lookup(name: &str, config: &Option<Value>) -> Result<Box<dyn Onramp>> {

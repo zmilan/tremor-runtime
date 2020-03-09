@@ -38,9 +38,11 @@ pub struct Config {
 
 impl ConfigImpl for Config {}
 
+#[derive(Clone)]
 pub struct Blaster {
     pub config: Config,
     data: Vec<u8>,
+    acc: Acc,
 }
 
 impl onramp::Impl for Blaster {
@@ -57,14 +59,18 @@ impl onramp::Impl for Blaster {
             } else {
                 source_data_file.read_to_end(&mut data)?;
             };
-            Ok(Box::new(Self { config, data }))
+            Ok(Box::new(Self {
+                config,
+                data,
+                acc: Acc::default(),
+            }))
         } else {
             Err("Missing config for blaster onramp".into())
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Acc {
     elements: Vec<Vec<u8>>,
     consuming: Vec<Vec<u8>>,
@@ -75,36 +81,22 @@ struct Acc {
 // with iterating over the data.
 #[allow(clippy::needless_pass_by_value)]
 fn onramp_loop(
+    mut source: Blaster,
     rx: &Receiver<onramp::Msg>,
-    data: Vec<u8>,
-    config: &Config,
     mut preprocessors: Preprocessors,
     mut codec: Box<dyn Codec>,
     mut metrics_reporter: RampReporter,
 ) -> Result<()> {
     let mut pipelines: Vec<(TremorURL, pipeline::Addr)> = Vec::new();
-    let mut acc = Acc::default();
-    let elements: Result<Vec<Vec<u8>>> = data
-        .lines()
-        .map(|e| -> Result<Vec<u8>> {
-            if config.base64 {
-                Ok(base64::decode(&e?.as_bytes())?)
-            } else {
-                Ok(e?.as_bytes().to_vec())
-            }
-        })
-        .collect();
-    acc.elements = elements?;
-    acc.consuming = acc.elements.clone();
+    task::block_on(source.init())?;
 
     let origin_uri = tremor_pipeline::EventOriginUri {
         scheme: "tremor-blaster".to_string(),
         host: hostname(),
         port: None,
-        path: vec![config.source.clone()],
+        path: vec![source.config.source.clone()],
     };
 
-    let iters = config.iters;
     let mut id = 0;
     loop {
         match task::block_on(handle_pipelines(&rx, &mut pipelines, &mut metrics_reporter))? {
@@ -112,32 +104,63 @@ fn onramp_loop(
             PipeHandlerResult::Terminate => return Ok(()),
             PipeHandlerResult::Normal => (),
         }
+        match task::block_on(source.read())? {
+            SourceReply::Data(data) => {
+                let mut ingest_ns = nanotime();
+                send_event(
+                    &pipelines,
+                    &mut preprocessors,
+                    &mut codec,
+                    &mut metrics_reporter,
+                    &mut ingest_ns,
+                    &origin_uri,
+                    id,
+                    data,
+                );
+                id += 1;
+            }
+            SourceReply::StateChange(SourceState::Disconnected) => return Ok(()),
+            SourceReply::StateChange(SourceState::Connected) => (),
+        }
+    }
+}
+
+#[async_trait::async_trait()]
+impl Source for Blaster {
+    async fn read(&mut self) -> Result<SourceReply> {
         // TODO better sleep perhaps
-        if let Some(ival) = config.interval {
+        if let Some(ival) = self.config.interval {
             thread::sleep(Duration::from_nanos(ival));
         }
-        if Some(acc.count) == iters {
-            return Ok(());
+        if Some(self.acc.count) == self.config.iters {
+            return Ok(SourceReply::StateChange(SourceState::Disconnected));
         };
-        acc.count += 1;
-        if acc.consuming.is_empty() {
-            acc.consuming = acc.elements.clone();
+        self.acc.count += 1;
+        if self.acc.consuming.is_empty() {
+            self.acc.consuming = self.acc.elements.clone();
         }
 
-        if let Some(data) = acc.consuming.pop() {
-            let mut ingest_ns = nanotime();
-            send_event(
-                &pipelines,
-                &mut preprocessors,
-                &mut codec,
-                &mut metrics_reporter,
-                &mut ingest_ns,
-                &origin_uri,
-                id,
-                data,
-            );
-            id += 1;
+        if let Some(data) = self.acc.consuming.pop() {
+            Ok(SourceReply::Data(data))
+        } else {
+            Ok(SourceReply::StateChange(SourceState::Disconnected))
         }
+    }
+    async fn init(&mut self) -> Result<SourceState> {
+        let elements: Result<Vec<Vec<u8>>> = self
+            .data
+            .lines()
+            .map(|e| -> Result<Vec<u8>> {
+                if self.config.base64 {
+                    Ok(base64::decode(&e?.as_bytes())?)
+                } else {
+                    Ok(e?.as_bytes().to_vec())
+                }
+            })
+            .collect();
+        self.acc.elements = elements?;
+        self.acc.consuming = self.acc.elements.clone();
+        Ok(SourceState::Connected)
     }
 }
 
@@ -149,15 +172,12 @@ impl Onramp for Blaster {
         metrics_reporter: RampReporter,
     ) -> Result<onramp::Addr> {
         let (tx, rx) = channel(1);
-        let data2 = self.data.clone();
-        let config2 = self.config.clone();
         let codec = codec::lookup(&codec)?;
         let preprocessors = make_preprocessors(&preprocessors)?;
+        let source = self.clone();
         thread::Builder::new()
             .name(format!("onramp-blaster-{}", "???"))
-            .spawn(move || {
-                onramp_loop(&rx, data2, &config2, preprocessors, codec, metrics_reporter)
-            })?;
+            .spawn(move || onramp_loop(source, &rx, preprocessors, codec, metrics_reporter))?;
         Ok(tx)
     }
 
